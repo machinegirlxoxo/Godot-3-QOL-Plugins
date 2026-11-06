@@ -17,6 +17,15 @@ func get_visible_name() -> String:
 	return "Texture Quality"
 
 
+# When Godot meets a new image (no .import file yet) it picks the recognised importer with the
+# highest priority. The built-in "Texture" importer is 1.0, so anything above that makes
+# Texture Quality the default for every new png/jpg/webp/tga/bmp. Images that already have an
+# .import file keep whatever importer they use; you can still switch any single image back to
+# "Texture" in the Import dock's "Import As" list.
+func get_priority() -> float:
+	return 2.0
+
+
 func get_recognized_extensions() -> Array:
 	return ["png", "jpg", "jpeg", "webp", "tga", "bmp"]
 
