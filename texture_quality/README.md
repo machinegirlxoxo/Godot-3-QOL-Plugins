@@ -9,9 +9,9 @@ tiers at runtime using a quality level and a VRAM budget. Materials keep referen
 2. Project > Project Settings > Plugins > enable **Texture Quality**.
 
 New images are then imported with the Texture Quality importer automatically. Images that were
-already imported before the plugin was enabled are converted in place the next time the editor
-starts, without a restart prompt. You can run the conversion by hand at any time with
-**Project > Tools > Texture Quality: Convert All Textures**.
+already imported before the plugin was enabled are converted with
+**Project > Tools > Texture Quality: Convert All Textures**. To run that automatically when the editor
+starts, set `texture_quality/auto_convert_existing` to true (off by default).
 
 ## Import options
 Select an imported image and use the Import dock. The presets set the colour-space handling:
@@ -34,11 +34,34 @@ same values are written to Project Settings and read by the `TextureQuality` aut
 - `texture_quality/vram_budget_mb`: VRAM budget in MB, `0` = unlimited
 - `texture_quality/max_swaps_per_frame`: GPU uploads per frame
 
+## Distance LOD (v2.3)
+Textures swap tiers by how far the camera is from the meshes that use them. Set the two distances in
+**Project Settings > General > Texture Quality**:
+
+- `texture_quality/near_distance` (default 5): at this distance or closer a texture uses its best tier.
+- `texture_quality/far_distance` (default 60): at this distance or farther it uses its smallest tier.
+- In between the tiers step down evenly. `texture_quality/distance_lod` turns the feature off.
+- `texture_quality/lod_nodes_per_frame` (default 128): how many meshes are measured per frame.
+
+How it works: the autoload tracks every `MeshInstance` and `Sprite3D`, finds the Texture Quality textures
+in their materials (all SpatialMaterial slots, ShaderMaterial parameters, `next_pass`), and measures the
+distance from the current camera to each node's bounding box. A texture used by several meshes follows
+the nearest one. The global quality level stays the ceiling (LOD never gives a better tier than it allows)
+and the VRAM budget still applies on top. A texture has to move a bit past the halfway point between two
+tiers before it switches, so it does not flicker at a boundary.
+
+Not covered: textures that no tracked node uses (UI, 2D sprites, particles, CSG, GridMap, terrain) use the
+global quality level. Only the root viewport's current camera is used. Scripts can call
+`TextureQuality.set_distance_range(near, far)`, `set_distance_lod_enabled(bool)` and
+`save_distance_range(near, far)`.
+
 ## Notes
 - Requires GLES3 because tiers use S3TC compression.
-- To turn off automatic conversion of pre-existing textures, set
-  `texture_quality/auto_convert_existing=false` in Project Settings. New imports still use the
-  Texture Quality importer; pick another importer in the Import dock to opt out per file.
+- New images are baked as soon as they are added to the project. Godot first imports a new png with its
+  built-in Texture importer; the plugin notices that, switches the file to Texture Quality and reimports
+  it a moment later (no Import dock, no restart prompt). The Output panel prints
+  `Texture Quality: baking N new texture(s)...`. Turn this off with `texture_quality/convert_new_textures`,
+  or pick another importer in the Import dock to opt out per file.
 - Files under `res://addons/` and files using other custom importers are never converted
   automatically.
 - The built-in importer's old `.stex` files may stay in `.import/` after conversion. They are no

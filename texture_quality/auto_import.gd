@@ -14,6 +14,8 @@ var _editor_interface
 var _tree
 var _running = false
 var _cancelled = false
+var _queue = []
+var _draining = false
 
 
 func setup(import_plugin, editor_interface, tree) -> void:
@@ -108,6 +110,56 @@ func convert_all() -> void:
 		print("Texture Quality: could not start an editor rescan; the textures will be converted on the next editor start.")
 
 	_running = false
+
+
+# Called for images the editor has just (re)imported. Anything that came in through the built-in
+# "Texture" importer is switched to Texture Quality and reimported, so a new png is baked without
+# touching the Import dock (and without the "restart the editor" prompt it shows).
+func convert_files(paths) -> void:
+	if _cancelled or _import_plugin == null or _editor_interface == null or _tree == null:
+		return
+	for p in paths:
+		var path = str(p)
+		if _is_candidate(path) and not _queue.has(path):
+			_queue.append(path)
+	if _draining or _queue.empty():
+		return
+	_draining = true
+	while not _queue.empty() and not _cancelled:
+		var batch = _queue.duplicate()
+		_queue.clear()
+		var converted = 0
+		for path in batch:
+			if _convert(path):
+				converted += 1
+		if converted > 0:
+			print("Texture Quality: baking %d new texture(s)..." % converted)
+			yield(_rescan(), "completed")
+	_draining = false
+
+
+# Asks the editor to rescan so it notices the changed .import files and reimports them.
+func _rescan() -> void:
+	var fs = _editor_interface.get_resource_filesystem()
+	yield(_tree, "idle_frame")
+	var started = false
+	var tries = 0
+	while tries < 20 and not _cancelled:
+		if not fs.is_scanning():
+			fs.scan()
+			yield(_tree, "idle_frame")
+			if fs.is_scanning():
+				started = true
+				break
+		yield(_tree, "idle_frame")
+		tries += 1
+	if started:
+		var waited = 0
+		while fs.is_scanning() and waited < WAIT_LIMIT and not _cancelled:
+			yield(_tree, "idle_frame")
+			waited += 1
+		for i in range(3):
+			yield(_tree, "idle_frame")
 
 
 func _collect(dir, out: Array) -> void:

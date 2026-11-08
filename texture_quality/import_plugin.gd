@@ -62,6 +62,8 @@ func get_import_options(preset: int) -> Array:
 		{"name": "compress", "default_value": true},
 		{"name": "kind", "default_value": preset, "property_hint": PROPERTY_HINT_ENUM, "hint_string": "Auto,Color (sRGB),Normal Map,Data (Linear)"},
 		{"name": "repeat", "default_value": true},
+		{"name": "filter", "default_value": true},
+		{"name": "mipmaps", "default_value": true},
 		{"name": "anisotropic", "default_value": false},
 		{"name": "priority", "default_value": 1.0},
 	]

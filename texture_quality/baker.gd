@@ -76,7 +76,12 @@ func bake(src: String, save_path: String, opt: Dictionary) -> Dictionary:
 	var kind = _kind_from_option(src, int(opt.get("kind", 0)))
 
 	# Colour textures must be flagged sRGB or GLES3 shows them washed out.
-	var flags = Texture.FLAG_MIPMAPS | Texture.FLAG_FILTER
+	var use_mips = bool(opt.get("mipmaps", true))
+	var flags = 0
+	if use_mips:
+		flags |= Texture.FLAG_MIPMAPS
+	if bool(opt.get("filter", true)):
+		flags |= Texture.FLAG_FILTER
 	if bool(opt.get("repeat", true)):
 		flags |= Texture.FLAG_REPEAT
 	if bool(opt.get("anisotropic", false)):
@@ -92,7 +97,8 @@ func bake(src: String, save_path: String, opt: Dictionary) -> Dictionary:
 		t.copy_from(img)
 		if int(sizes[i].x) != t.get_width() or int(sizes[i].y) != t.get_height():
 			t.resize(int(sizes[i].x), int(sizes[i].y), Image.INTERPOLATE_LANCZOS)
-		t.generate_mipmaps(kind == Image.COMPRESS_SOURCE_NORMAL)
+		if use_mips:
+			t.generate_mipmaps(kind == Image.COMPRESS_SOURCE_NORMAL)
 		if bool(opt.get("compress", true)):
 			t.compress(Image.COMPRESS_S3TC, kind, 0.7)
 		var path = "%s_t%d.res" % [save_path, i]
