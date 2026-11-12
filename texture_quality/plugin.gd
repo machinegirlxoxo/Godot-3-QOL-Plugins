@@ -5,11 +5,13 @@ const AUTOLOAD = "TextureQuality"
 const ImportPluginScript = preload("res://addons/texture_quality/import_plugin.gd")
 const MenuScript = preload("res://addons/texture_quality/editor_menu.gd")
 const AutoImportScript = preload("res://addons/texture_quality/auto_import.gd")
+const NodeToggleScript = preload("res://addons/texture_quality/node_toggle.gd")
 const CONVERT_MENU = "Texture Quality: Convert All Textures"
 
 var _import_plugin
 var _menu
 var _auto
+var _inspector
 
 
 func _enter_tree() -> void:
@@ -23,6 +25,11 @@ func _enter_tree() -> void:
 	_menu = MenuScript.new()
 	_menu.setup(get_editor_interface().get_editor_settings())
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _menu)
+
+	# "Ignore distance LOD" checkbox in the Inspector for 3D nodes.
+	_inspector = NodeToggleScript.new()
+	_inspector.setup(get_undo_redo())
+	add_inspector_plugin(_inspector)
 
 	# Converts images that were imported before the plugin was enabled (Project > Tools, run by hand).
 	_auto = AutoImportScript.new()
@@ -41,6 +48,9 @@ func _exit_tree() -> void:
 	var fs = get_editor_interface().get_resource_filesystem()
 	if fs != null and fs.is_connected("resources_reimported", self, "_on_resources_reimported"):
 		fs.disconnect("resources_reimported", self, "_on_resources_reimported")
+	if _inspector != null:
+		remove_inspector_plugin(_inspector)
+		_inspector = null
 	remove_tool_menu_item(CONVERT_MENU)
 	if _auto != null:
 		_auto.cancel()

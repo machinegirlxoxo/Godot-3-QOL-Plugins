@@ -4,8 +4,10 @@ extends MenuButton
 #  - Quality level: which baked tier the editor shows (default: Lowest, which costs nothing).
 #    The chosen level is also written to the project settings, so the game uses it when you press Play.
 #  - Game VRAM Budget: written to the project settings the game reads.
+#  - Distance LOD (game): on/off switch for swapping tiers by camera distance (project setting `texture_quality/distance_lod`).
 
 const LEVELS = [[0, "Highest"], [1, "High"], [2, "Medium"], [3, "Low"], [99, "Lowest (editor default)"]]
+const LOD_ID = 100
 const BUDGETS = [[0, "Unlimited"], [512, "512 MB"], [1024, "1 GB"], [2048, "2 GB"], [4096, "4 GB"]]
 
 var _settings: EditorSettings
@@ -35,6 +37,8 @@ func _ready() -> void:
 	for i in range(BUDGETS.size()):
 		_budget_menu.add_radio_check_item(BUDGETS[i][1], i)
 	popup.add_submenu_item("Game VRAM Budget", "budget")
+	popup.add_separator()
+	popup.add_check_item("Distance LOD (game)", LOD_ID)
 	popup.connect("id_pressed", self, "_on_id_pressed")
 	_budget_menu.connect("id_pressed", self, "_on_budget_pressed")
 
@@ -42,6 +46,7 @@ func _ready() -> void:
 		_level = int(_settings.get_project_metadata("texture_quality", "level", 99))
 	_select_level(_level, false)
 	_refresh_budget_checks()
+	_refresh_lod_check()
 
 
 func _select_level(level: int, persist_to_game: bool = true) -> void:
@@ -69,7 +74,24 @@ func _select_level(level: int, persist_to_game: bool = true) -> void:
 
 
 func _on_id_pressed(id: int) -> void:
+	if id == LOD_ID:
+		var on = true
+		if ProjectSettings.has_setting("texture_quality/distance_lod"):
+			on = bool(ProjectSettings.get_setting("texture_quality/distance_lod"))
+		ProjectSettings.set_setting("texture_quality/distance_lod", not on)
+		ProjectSettings.save()
+		_clear_user_override("distance_lod")
+		_refresh_lod_check()
+		return
 	_select_level(id)
+
+
+func _refresh_lod_check() -> void:
+	var on = true
+	if ProjectSettings.has_setting("texture_quality/distance_lod"):
+		on = bool(ProjectSettings.get_setting("texture_quality/distance_lod"))
+	var popup = get_popup()
+	popup.set_item_checked(popup.get_item_index(LOD_ID), on)
 
 
 func _on_budget_pressed(index: int) -> void:

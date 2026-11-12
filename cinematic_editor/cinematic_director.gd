@@ -81,11 +81,37 @@ func _ready() -> void:
 				_player = c
 				break
 	if _player != null:
+		_fix_player_root()
 		_player.connect("animation_finished", self, "_on_animation_finished")
 	if not Engine.editor_hint:
 		_build_subtitle_ui()
 		if autoplay_cutscene != "":
 			play(autoplay_cutscene)
+
+
+# Track paths are relative to the root of the scene the cutscene was made in (`owner`). If the player's Root Node
+# does not point there (e.g. the Cinematic node was placed under another node), use the owner when more of the
+# tracks resolve from it.
+func _fix_player_root() -> void:
+	if owner == null:
+		return
+	var base = _player.get_node_or_null(_player.root_node)
+	if base == owner:
+		return
+	var from_base = 0
+	var from_owner = 0
+	for nm in _player.get_animation_list():
+		var a = _player.get_animation(nm)
+		for i in range(a.get_track_count()):
+			var np = str(a.track_get_path(i)).split(":")[0]
+			if np == "" or np == ".":
+				continue
+			if base != null and base.has_node(np):
+				from_base += 1
+			if owner.has_node(np):
+				from_owner += 1
+	if from_owner > from_base:
+		_player.root_node = _player.get_path_to(owner)
 
 
 func play(cutscene_name: String = "") -> void:

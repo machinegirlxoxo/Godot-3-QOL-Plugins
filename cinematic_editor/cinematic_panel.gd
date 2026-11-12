@@ -124,6 +124,25 @@ var _eye_on: Texture
 var _eye_off: Texture
 var _xform_box: VBoxContainer
 var _xform_card: Control          # the Transform card (hidden while nothing is selected)
+var _mh_page: Control              # the "MetaHuman" sidebar tab (only shown while the scene has a face board)
+var _mh_holder: Control
+var _mh_board = null               # the 2D face board inside that tab (face_board.gd of the MetaHuman Rig add-on)
+var _face_track_anim = null
+var _face_track_count = -1
+var _face_tracks = []
+var _mh_node = null                # the MetaHumanFaceBoard3D node of the scene
+var _mh_rig_id = 0
+var _mh_busy = false
+var _mh_dirty = false
+var _mh_timer = 0.0
+var _mh_tab_hidden = true          # last state given to the tab (set_tab_hidden is only called when it changes)
+var _mh_missing = 0                # consecutive scans that found no face board
+var _mh_panning = false
+var _mh_pan = Vector2()
+var _face_label: Label
+var _face_auto: CheckBox
+var _face_count = -1               # number of face controls the inspector was built with
+var _face_drag = null              # the face board whose dot is being dragged in the Editor view
 var _ap_card: Control              # the Animation card
 var _xf_spins = []                 # [position, rotation, scale] -> each one [x, y, z] SpinBox
 var _xf_last = []                  # last values shown in the spin boxes
@@ -195,6 +214,13 @@ func _ready() -> void:
 # "I" keys the selected node (or the camera) like Blender, G / R / S transform it with the mouse,
 # unless you are typing in a text box.
 func _input(ev: InputEvent) -> void:
+	if _mh_pan_input(ev):
+		get_tree().set_input_as_handled()
+		return
+	if _mh_dirty and ev is InputEventMouseButton and ev.button_index == BUTTON_LEFT and not ev.pressed:
+		_mh_dirty = false
+		if _face_auto != null and _face_auto.pressed and _mh_node != null and is_instance_valid(_mh_node):
+			_key_face_pose(_mh_node)
 	if _card_drag != null and ev is InputEventMouseButton and ev.button_index == BUTTON_LEFT and not ev.pressed:
 		_end_card_drag()
 		return
@@ -1342,6 +1368,25 @@ func _build_ui() -> void:
 	_xform_card.visible = false
 	_button("Key transform (pos, rot, scale)", sec, "_on_key_transform")
 
+	# MetaHuman tab: the face board itself + key buttons. Hidden unless the scene has a MetaHumanFaceBoard3D.
+	_mh_page = VBoxContainer.new()
+	_mh_page.name = "MetaHuman"
+	_mh_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tabs.add_child(_mh_page)
+	_face_label = _hint("", _mh_page)
+	var face_key = _button("Key face pose  [I]", _mh_page, "_on_key_face_pose")
+	face_key.hint_tooltip = "Keys every face control that is in use (or already animated) at the playhead."
+	_face_auto = CheckBox.new()
+	_face_auto.text = "Auto-key when I release a dot"
+	_face_auto.hint_tooltip = "Drag a yellow dot on the board (here or in the Editor view); the pose is keyed when you let go."
+	_mh_page.add_child(_face_auto)
+	_button("Reset face (all controls to 0)", _mh_page, "_on_reset_face")
+	_mh_holder = VBoxContainer.new()
+	_mh_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mh_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_mh_page.add_child(_mh_holder)
+	_tabs.set_tab_hidden(_mh_page.get_index(), true)
+
 	# AnimationPlayers found on the selected node
 	sec = _section("Animation to play", nodes_page, true, "", false)
 	_ap_card = sec.get_parent().get_parent()
@@ -1535,6 +1580,15 @@ func _refresh_scene() -> void:
 					if c is AnimationPlayer:
 						_player = c
 						break
+	# Track paths are relative to the scene root (_root). If the Cinematic node sits deeper than directly under it
+	# (e.g. under "head"), the player's default root "../.." points at the wrong node and the game cannot find
+	# any track ("Node not found: head/MetaHumanFaceBoard3D..."), so point it at the scene root explicitly.
+	if _root != null and _player != null:
+		var want = _player.get_path_to(_root)
+		if _player.root_node != want:
+			_player.root_node = want
+			if editor.has_method("mark_scene_as_unsaved"):
+				editor.mark_scene_as_unsaved()
 	_no_scene_label.visible = _root == null
 	_setup_box.visible = _root != null and (_director == null or _player == null)
 	_main_box.visible = _director != null and _player != null
@@ -1545,6 +1599,7 @@ func _refresh_scene() -> void:
 		_refresh_cameras()
 		_sync_look_ui()
 		_refresh_node_list()
+		_refresh_mh_tab(true)
 		_on_selection_changed()
 		if _root.get_instance_id() != _edit_root_id:
 			_edit_root_id = _root.get_instance_id()
@@ -1865,6 +1920,7 @@ func _seek(t: float) -> void:
 	if not _player.is_playing():
 		_silence_audio()            # Godot starts audio on every seek; scrubbing should stay quiet
 		_scrub_anim_players()
+	_drive_face_tracks(_time)
 	_set_slider(_time)
 
 
@@ -1960,10 +2016,15 @@ func _process(delta: float) -> void:
 	if playing:
 		_time = _player.current_animation_position
 		_set_slider(_time)
+		_drive_face_tracks(_time)
 	_set_play_visual(playing)
 	_update_card_drag()
 	_move_edit_camera(delta)
 	_refresh_xform_fields()
+	_mh_timer += delta
+	if _mh_timer > 0.5:
+		_mh_timer = 0.0
+		_refresh_mh_tab(true)
 	_ins_refresh()
 	_update_preview()
 	_sheet.update()
@@ -1998,6 +2059,9 @@ func _reset_edit_view() -> void:
 
 
 func _on_edit_gui_input(ev: InputEvent) -> void:
+	if _face_board_input(ev):
+		accept_event()
+		return
 	if ev is InputEventMouseButton:
 		if ev.button_index == BUTTON_RIGHT:
 			_edit_rmb = ev.pressed
@@ -3558,6 +3622,7 @@ func _on_selection_changed() -> void:
 	_sync_list_selection()
 	_refresh_anim_ui()
 	_refresh_xform_fields(true)
+	_refresh_mh_tab()
 	if nodes.empty():
 		_sel_label.text = "Nothing selected in the scene tree."
 		_rebuild_inspector()
@@ -4446,6 +4511,283 @@ func _on_xform_edited(value: float, prop: String, axis: int) -> void:
 	_say("%s of %s edited. Press 'Key transform' to key it at %s." % [prop, n.name, _fmt_time(_time)])
 
 
+# ------------------------------------------------------------------ MetaHuman face board
+# The face board (MetaHumanFaceBoard3D, from the MetaHuman Rig add-on) is an ordinary node of the scene:
+#  * it is drawn in the Editor view (so it can be picked and its dots dragged) but never in the Result view,
+#    because its quad is on the same visual layer as this tab's gizmos (GIZMO_LAYER), which the Result camera skips;
+#  * every face control is a float property  face/<control>  of that node, so it also shows up in the Properties
+#    list below (group "Face controls") and any of them can be keyed one by one;
+#  * "Key face pose" keys all controls in use at once, "I" does the same while the board is selected.
+
+func _face_node():
+	for n in _selected_nodes():
+		if n is Spatial and n != _director and n.has_method("get_face_pose"):
+			return n
+	return null
+
+
+func _find_face_boards(n: Node, out: Array, only_visible: bool = true) -> void:
+	if n is Spatial and n.has_method("get_face_pose") and n.has_method("handle_input") and (n.is_visible_in_tree() or not only_visible):
+		out.append(n)
+	for c in n.get_children():
+		_find_face_boards(c, out, only_visible)
+
+
+# Shows / hides the MetaHuman tab and keeps its 2D board in step with the scene's MetaHumanFaceBoard3D.
+func _refresh_mh_tab(rescan: bool = false) -> void:
+	if _mh_page == null:
+		return
+	if rescan or _mh_node == null or not is_instance_valid(_mh_node) or not _mh_node.is_inside_tree():
+		var old = _mh_node
+		_mh_node = null
+		if _root != null:
+			var found = []
+			_find_face_boards(_root, found, false)
+			if not found.empty():
+				_mh_node = found[0]
+		if old != _mh_node:
+			_mh_detach(old)
+			_mh_rig_id = 0
+	if _mh_node == null:
+		_mh_missing += 1
+		# hide only after a few empty scans, and never touch the tab state otherwise (calling
+		# set_tab_hidden over and over made Godot jump back to the first tab)
+		if _mh_missing >= 3 and not _mh_tab_hidden:
+			_mh_tab_hidden = true
+			if _tabs.current_tab == _mh_page.get_index():
+				_tabs.current_tab = 0
+			_tabs.set_tab_hidden(_mh_page.get_index(), true)
+		return
+	_mh_missing = 0
+	if _mh_tab_hidden:
+		_mh_tab_hidden = false
+		_tabs.set_tab_hidden(_mh_page.get_index(), false)
+	if not (_mh_node.has_method("get_face_control_count") and _mh_node.has_method("get_apply_status") and _mh_node.has_method("set_gui_value")):
+		_face_label.text = "The face board in this scene runs an older MetaHuman Rig script. Install the updated metahuman_rig add-on, then restart Godot (or reload the scene) so the board picks it up."
+		return
+	var count = _mh_node.get_face_control_count()
+	var rig = _mh_node.rig
+	var rid = rig.get_instance_id() if rig != null else 0
+	var board_ok = count == 0 or _mh_board != null
+	if count != _face_count or rid != _mh_rig_id or not board_ok:
+		_mh_rebuild(rig, count)
+		_face_count = count            # only after a rebuild went through, so a failed one is retried
+		_mh_rig_id = rid
+		if _face_node() == _mh_node:
+			_rebuild_inspector()          # the face/... properties exist now
+
+
+func _mh_detach(n) -> void:
+	if n != null and is_instance_valid(n) and n.is_connected("gui_value_changed", self, "_on_mh_node_changed"):
+		n.disconnect("gui_value_changed", self, "_on_mh_node_changed")
+		n.disconnect("pose_changed", self, "_on_mh_node_pose")
+	if _mh_board != null and is_instance_valid(_mh_board):
+		_mh_board.queue_free()
+	_mh_board = null
+
+
+func _mh_rebuild(rig, count: int) -> void:
+	if _mh_board != null and is_instance_valid(_mh_board):
+		_mh_board.queue_free()
+	_mh_board = null
+	if not _mh_node.is_connected("gui_value_changed", self, "_on_mh_node_changed"):
+		_mh_node.connect("gui_value_changed", self, "_on_mh_node_changed")
+		_mh_node.connect("pose_changed", self, "_on_mh_node_pose")
+	if count == 0 or rig == null:
+		_face_label.text = "The face board has no rig yet. Open the MetaHuman Rig dock (it loads the .rig.json by itself) and keep 'Show face board in the 3D viewport' ticked."
+		return
+	_face_label.text = "%d face controls. Drag the yellow dots here or on the board in the Editor view, then key the pose.\n%s" % [count, _mh_node.get_apply_status()]
+	var path = "res://addons/metahuman_rig/face_board.gd"
+	if not ResourceLoader.exists(path):
+		_face_label.text += "\n(MetaHuman Rig add-on not found at %s: the board is not drawn here.)" % path
+		_mh_board = null
+		return
+	_mh_board = load(path).new()
+	_mh_board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mh_board.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_mh_board.rect_min_size = Vector2(0, 360)
+	_mh_board.connect("gui_value_changed", self, "_on_mh_gui")
+	_mh_holder.add_child(_mh_board)
+	_mh_board.build(rig)
+	_mh_board.sync_from(rig)
+
+
+# Middle mouse drag over the MetaHuman tab's board pans it (the board is a ScrollContainer).
+func _mh_pan_input(ev: InputEvent) -> bool:
+	# Mouse wheel over the board zooms it (about the mouse position).
+	if ev is InputEventMouseButton and ev.pressed and (ev.button_index == BUTTON_WHEEL_UP or ev.button_index == BUTTON_WHEEL_DOWN):
+		if _mh_board != null and is_instance_valid(_mh_board) and _mh_board.is_visible_in_tree() and _mh_board.get_global_rect().has_point(ev.global_position) and _mh_board.has_method("set_zoom"):
+			var f = 1.1 if ev.button_index == BUTTON_WHEEL_UP else 1.0 / 1.1
+			_mh_board.set_zoom(_mh_board.zoom * f, ev.global_position - _mh_board.get_global_rect().position)
+			return true
+		return false
+	if ev is InputEventMouseButton and ev.button_index == BUTTON_MIDDLE:
+		if ev.pressed:
+			if _mh_board != null and is_instance_valid(_mh_board) and _mh_board.is_visible_in_tree() and _mh_board.get_global_rect().has_point(ev.global_position):
+				_mh_panning = true
+				_mh_pan = Vector2(_mh_board.scroll_horizontal, _mh_board.scroll_vertical)
+				return true
+			return false
+		if _mh_panning:
+			_mh_panning = false
+			return true
+		return false
+	if _mh_panning and ev is InputEventMouseMotion:
+		if _mh_board == null or not is_instance_valid(_mh_board):
+			_mh_panning = false
+			return false
+		var hb = _mh_board.get_h_scrollbar()
+		var vb = _mh_board.get_v_scrollbar()
+		_mh_pan -= ev.relative
+		_mh_pan.x = clamp(_mh_pan.x, 0.0, max(0.0, hb.max_value - hb.page))
+		_mh_pan.y = clamp(_mh_pan.y, 0.0, max(0.0, vb.max_value - vb.page))
+		_mh_board.scroll_horizontal = int(round(_mh_pan.x))
+		_mh_board.scroll_vertical = int(round(_mh_pan.y))
+		return true
+	return false
+
+
+# a dot of the embedded board was dragged
+func _on_mh_gui(index: int, value: float) -> void:
+	if _mh_node == null or not is_instance_valid(_mh_node):
+		return
+	_mh_busy = true
+	_mh_node.set_gui_value(index, value)
+	_mh_busy = false
+	_mh_dirty = true
+	_mh_status_line(index, value)
+
+
+func _mh_status_line(index: int, value: float) -> void:
+	var nm = ""
+	if _mh_node.rig != null and index >= 0 and index < _mh_node.rig.gui_names.size():
+		nm = str(_mh_node.rig.gui_names[index])
+	_face_label.text = "%s = %.2f -> moved %d joints.\n%s" % [nm, value, _mh_node.last_joints, _mh_node.get_apply_status()]
+
+
+# the board changed from somewhere else (dragged in the Editor view, animation, Inspector)
+func _on_mh_node_changed(_index = 0, _value = 0.0) -> void:
+	_mh_sync()
+
+
+func _on_mh_node_pose() -> void:
+	_mh_sync()
+
+
+func _mh_sync() -> void:
+	if _mh_busy or _mh_board == null or not is_instance_valid(_mh_board) or _mh_node == null or _mh_node.rig == null:
+		return
+	_mh_board.sync_from(_mh_node.rig)
+
+
+# A click on a dot of a face board is taken before the transform gizmo / node picking; the board then follows the
+# mouse until the button is released. Returns true when the board used the event.
+func _face_board_input(ev: InputEvent) -> bool:
+	if _edit_cam == null or _root == null:
+		return false
+	if _face_drag != null:
+		if not is_instance_valid(_face_drag):
+			_face_drag = null
+			return false
+		var used = _face_drag.handle_input(_edit_cam, ev)
+		if ev is InputEventMouseButton and ev.button_index == BUTTON_LEFT and not ev.pressed:
+			var done = _face_drag
+			_face_drag = null
+			if _face_auto != null and _face_auto.pressed:
+				_key_face_pose(done)
+		return used
+	if not (ev is InputEventMouseButton) or ev.button_index != BUTTON_LEFT or not ev.pressed:
+		return false
+	if _edit_rmb or _edit_mmb or _gz_drag != null or _gz_pick(ev.position) >= 0:
+		return false
+	var boards = []
+	_find_face_boards(_root, boards)
+	for b in boards:
+		if b.handle_input(_edit_cam, ev):
+			_face_drag = b
+			return true
+	return false
+
+
+func _mh_target():
+	var n = _face_node()
+	return n if n != null else _mh_node
+
+
+func _on_key_face_pose() -> void:
+	var n = _mh_target()
+	if n == null:
+		_say("There is no face board in this scene.")
+		return
+	_key_face_pose(n)
+
+
+func _on_reset_face() -> void:
+	var n = _mh_target()
+	if n == null:
+		return
+	n.reset_face()
+	_say("Face reset. Key it to bring the face back to neutral at %s." % _fmt_time(_time))
+
+
+# Face poses are keyed as value tracks  <board>:face/<control>.  Godot's AnimationPlayer has to write those into the
+# board through a script-defined property, which does not always reach the rig (so the face never moved). This reads
+# the tracks itself and sets the controls on the board directly, at the scrub / playback time.
+func _drive_face_tracks(t: float) -> void:
+	if _anim == null or _root == null:
+		return
+	var count = _anim.get_track_count()
+	if _face_track_anim != _anim or _face_track_count != count:
+		_face_track_anim = _anim
+		_face_track_count = count
+		_face_tracks = []
+		for i in range(count):
+			if _anim.track_get_type(i) != Animation.TYPE_VALUE or not _anim.track_is_enabled(i):
+				continue
+			var tp = _anim.track_get_path(i)
+			if tp.get_subname_count() < 1:
+				continue
+			var prop = str(tp.get_concatenated_subnames())
+			if not prop.begins_with("face/"):
+				continue
+			var node = _root.get_node_or_null(NodePath(str(tp).split(":")[0]))
+			if node != null and node.has_method("get_face_pose"):
+				_face_tracks.append([i, node, prop])
+	if _face_tracks.empty():
+		return
+	for e in _face_tracks:
+		if is_instance_valid(e[1]) and _anim.track_get_key_count(e[0]) > 0:
+			e[1].set(e[2], float(_anim.value_track_interpolate(e[0], t)))
+
+
+# Keys every control that is in use (not 0) and every control that already has a track in this cutscene
+# (so going back to 0 is keyed too). A control that gets its first key after 0 s also gets a 0 key at the
+# start, so the face does not begin in that expression.
+func _key_face_pose(board) -> void:
+	if not _ready_to_key():
+		return
+	var pose: Dictionary = board.get_face_pose()
+	if pose.empty():
+		_say("The face board has no rig yet.")
+		return
+	var count = 0
+	for prop in pose:
+		var v = float(pose[prop])
+		var path = _node_path_str(board, str(prop))
+		var existing = _anim.find_track(NodePath(path))
+		if existing == -1 and abs(v) < 0.00001:
+			continue
+		_put_value(path, _time, v)
+		if existing == -1 and _time > 0.0005:
+			_put_value(path, 0.0, 0.0)
+		count += 1
+	if count == 0:
+		_say("Nothing to key: every face control is at 0 and none is animated yet.")
+		return
+	_face_track_anim = null           # new tracks: rescan them
+	_finish_edit("Keyed face pose (%d controls) of %s at %s" % [count, board.name, _fmt_time(_time)], false)
+
+
 # ------------------------------------------------------------------ AnimationPlayers of a node
 
 func _find_players(n: Node, out: Array) -> void:
@@ -4624,6 +4966,10 @@ func _on_key_transform() -> void:
 # "I": keys the transform of every selected 3D node (a camera included). With nothing selected it keys the
 # camera chosen in the camera list instead.
 func _on_key_selected() -> void:
+	var fb = _face_node()
+	if fb != null:
+		_key_face_pose(fb)
+		return
 	for n in _selected_nodes():
 		if n is Spatial and n != _director:
 			_on_key_transform()

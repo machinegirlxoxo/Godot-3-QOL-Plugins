@@ -50,6 +50,13 @@ the nearest one. The global quality level stays the ceiling (LOD never gives a b
 and the VRAM budget still applies on top. A texture has to move a bit past the halfway point between two
 tiers before it switches, so it does not flicker at a boundary.
 
+**Excluding nodes (player, held weapon, ...):** select the node and tick **Ignore distance LOD (Texture
+Quality)** at the top of the Inspector. That is the same as adding the node to the group
+`texture_quality_ignore` (Node dock > Groups tab). That node and everything under it is left
+out of distance LOD: its textures always keep the best tier the quality level allows, even when the
+same texture is also used by meshes that are far away. From a script:
+`TextureQuality.exclude_from_lod($Player)`, or `exclude_from_lod($Player, false)` to undo it.
+
 Not covered: textures that no tracked node uses (UI, 2D sprites, particles, CSG, GridMap, terrain) use the
 global quality level. Only the root viewport's current camera is used. Scripts can call
 `TextureQuality.set_distance_range(near, far)`, `set_distance_lod_enabled(bool)` and

@@ -8,6 +8,11 @@ extends Node
 
 const StreamedTexScript = preload("res://addons/texture_quality/streamed_tex.gd")
 
+# Put a node in this group (Node dock > Groups) and distance LOD leaves its textures alone: the node and
+# everything under it keeps the best tier the quality level allows, even if the same texture is also
+# used by meshes far away. Meant for things like the player character or a held weapon.
+const IGNORE_GROUP = "texture_quality_ignore"
+
 signal tier_changed(key, tier)
 signal settled()
 
@@ -61,6 +66,7 @@ var _dist_new = {}                # texture key -> nearest distance seen during 
 var _lod_unmeasured = false
 var _pass_nodes = 0               # nodes measured in the running pass (had a camera)
 var _pass_managed = 0             # ... of which use a Texture Quality texture
+var _pass_excluded = 0            # nodes skipped because they are in the ignore group
 var _empty_passes = 0
 var _last_note = ""
 var _lod_wait = 0.0               # short pause between two passes
@@ -178,6 +184,17 @@ func set_distance_lod_enabled(enabled: bool) -> void:
 			e.lod_tier = -1
 		_lod_unmeasured = true
 	_dirty = true
+
+
+# Script version of the group: TextureQuality.exclude_from_lod($Player) / exclude_from_lod($Player, false)
+func exclude_from_lod(node: Node, excluded: bool = true) -> void:
+	if node == null:
+		return
+	if excluded:
+		node.add_to_group(IGNORE_GROUP)
+	elif node.is_in_group(IGNORE_GROUP):
+		node.remove_from_group(IGNORE_GROUP)
+	_lod_wait = 0.0
 
 
 func is_distance_lod_enabled() -> bool:
@@ -450,6 +467,10 @@ func _lod_step(delta: float) -> void:
 		_scan_index += 1
 		if node == null or not node.is_inside_tree():
 			continue
+		if _is_excluded(node):
+			_pass_excluded += 1
+			_measure(node, Vector3(), true)           # counts as distance 0: always the best tier
+			continue
 		var vp = node.get_viewport()
 		if vp == null:
 			continue
@@ -473,8 +494,10 @@ func _finish_pass() -> void:
 	_users = alive
 	var nodes = _pass_nodes
 	var managed = _pass_managed
+	var excluded = _pass_excluded
 	_pass_nodes = 0
 	_pass_managed = 0
+	_pass_excluded = 0
 	_lod_wait = 0.15
 	if _dist_new.empty() and not _users.empty():
 		# Nothing could be measured. The camera or the materials may not be ready yet, so wait a while first.
@@ -498,12 +521,12 @@ func _finish_pass() -> void:
 	_dist_new = {}
 	_lod_unmeasured = false
 	if OS.is_debug_build():
-		_lod_report(nodes, managed)
+		_lod_report(nodes, managed, excluded)
 
 
 # Debug builds print one line whenever the picture changes, e.g.
 #   TextureQuality LOD: 212 meshes measured, 180 use baked textures; tier 0: 12, tier 3: 40, ...
-func _lod_report(nodes: int, managed: int) -> void:
+func _lod_report(nodes: int, managed: int, excluded: int) -> void:
 	var hist = {}
 	for e in _entries.values():
 		hist[e.lod_tier] = int(hist.get(e.lod_tier, 0)) + 1
@@ -513,7 +536,7 @@ func _lod_report(nodes: int, managed: int) -> void:
 	for k in keys:
 		var label = ("tier %d" % k) if k >= 0 else ("not measured yet" if k == -1 else "no mesh uses it")
 		parts.append("%s: %d" % [label, hist[k]])
-	_lod_note("%d meshes measured, %d use baked textures; %s; near %.1f, far %.1f; quality ceiling level %d (0 = best)" % [nodes, managed, PoolStringArray(parts).join(", "), near_distance, far_distance, _quality])
+	_lod_note("%d meshes measured (%d excluded), %d use baked textures; %s; near %.1f, far %.1f; quality ceiling level %d (0 = best)" % [nodes, excluded, managed, PoolStringArray(parts).join(", "), near_distance, far_distance, _quality])
 
 
 func _lod_note(text: String) -> void:
@@ -536,15 +559,26 @@ func _tier_for_distance(e, d: float) -> int:
 	return int(round(f))
 
 
-func _measure(node, cpos: Vector3) -> void:
+func _is_excluded(node) -> bool:
+	var n = node
+	while n != null:
+		if n.is_in_group(IGNORE_GROUP):
+			return true
+		n = n.get_parent()
+	return false
+
+
+func _measure(node, cpos: Vector3, pinned: bool = false) -> void:
 	var tex = _textures_of(node)
 	if tex.empty():
 		return
 	_pass_managed += 1
-	# distance to the closest point of the node's bounding box (a big floor is "near" when you stand on it)
-	var box = node.get_transformed_aabb()
-	var p = Vector3(clamp(cpos.x, box.position.x, box.end.x), clamp(cpos.y, box.position.y, box.end.y), clamp(cpos.z, box.position.z, box.end.z))
-	var d = cpos.distance_to(p)
+	var d = 0.0
+	if not pinned:
+		# distance to the closest point of the node's bounding box (a big floor is "near" when you stand on it)
+		var box = node.get_transformed_aabb()
+		var p = Vector3(clamp(cpos.x, box.position.x, box.end.x), clamp(cpos.y, box.position.y, box.end.y), clamp(cpos.z, box.position.z, box.end.z))
+		d = cpos.distance_to(p)
 	for t in tex:
 		var key = t.source_path
 		if not _dist_new.has(key) or d < _dist_new[key]:
