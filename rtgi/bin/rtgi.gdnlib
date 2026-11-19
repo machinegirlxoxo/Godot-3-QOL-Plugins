@@ -1,0 +1,15 @@
+[general]
+singleton=false
+load_once=true
+symbol_prefix="godot_"
+reloadable=false
+
+[entry]
+X11.64="res://addons/rtgi/bin/rtgi.linux.release.64.so"
+Windows.64="res://addons/rtgi/bin/rtgi.windows.release.64.dll"
+OSX.64="res://addons/rtgi/bin/rtgi.osx.release.64.dylib"
+
+[dependencies]
+X11.64=[  ]
+Windows.64=[  ]
+OSX.64=[  ]

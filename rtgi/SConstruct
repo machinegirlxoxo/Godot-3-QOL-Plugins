@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+# Build:  scons platform=linux|windows|osx target=release  [-j8]
+# Needs godot-cpp (3.5 branch) checked out next to this folder as ../godot-cpp
+# and already built:  cd ../godot-cpp && scons platform=<p> generate_bindings=yes target=release -j8
+import os
+
+opts = Variables([], ARGUMENTS)
+env = DefaultEnvironment()
+
+opts.Add(EnumVariable("platform", "Target platform", "linux", ("linux", "windows", "osx")))
+opts.Add(EnumVariable("target", "Build target", "release", ("debug", "release")))
+opts.Add(BoolVariable("use_mingw", "Windows: build with MinGW instead of MSVC", False))
+opts.Add(PathVariable("godot_cpp", "Path to godot-cpp", "../godot-cpp", PathVariable.PathIsDir))
+opts.Update(env)
+if env["platform"] == "windows" and env["use_mingw"]:
+    env = DefaultEnvironment(tools=["mingw"], ENV=os.environ)
+    opts.Update(env)
+    env["CXX"] = os.environ.get("MINGW_CXX", "x86_64-w64-mingw32-g++")
+    env["CC"] = os.environ.get("MINGW_CC", "x86_64-w64-mingw32-gcc")
+    env["LINK"] = env["CXX"]
+    env["SHLIBSUFFIX"] = ".dll"
+
+platform = env["platform"]
+target = env["target"]
+cpp = env["godot_cpp"]
+bits = "64"
+
+if platform == "linux":
+    env.Append(CCFLAGS=["-fPIC", "-g" if target == "debug" else "-O3"], CXXFLAGS=["-std=c++14"])
+    env.Append(LINKFLAGS=["-pthread"])
+    lib_suffix = ".linux.%s.%s" % (target, bits)
+elif platform == "osx":
+    env.Append(CCFLAGS=["-arch", "x86_64", "-arch", "arm64", "-g" if target == "debug" else "-O3"], CXXFLAGS=["-std=c++14"])
+    env.Append(LINKFLAGS=["-arch", "x86_64", "-arch", "arm64"])
+    lib_suffix = ".osx.%s.%s" % (target, bits)
+elif env["use_mingw"]:
+    env.Append(CCFLAGS=["-O3" if target == "release" else "-g", "-Wwrite-strings"], CXXFLAGS=["-std=c++14"])
+    env.Append(LINKFLAGS=["-static", "-static-libgcc", "-static-libstdc++", "-Wl,--no-undefined"])
+    lib_suffix = ".windows.%s.%s" % (target, bits)
+else:
+    env.Append(CCFLAGS=["-DWIN32", "-D_WIN32", "-D_WINDOWS", "-W3", "-GR", "-D_CRT_SECURE_NO_WARNINGS", "-EHsc"])
+    env.Append(CCFLAGS=["-D_DEBUG", "-MDd"] if target == "debug" else ["-DNDEBUG", "-MD", "-O2"])
+    env.Append(LINKFLAGS=["-WX"])
+    lib_suffix = ".windows.%s.%s" % (target, bits)
+
+env.Append(CPPPATH=[
+    cpp + "/godot-headers", cpp + "/include", cpp + "/include/core", cpp + "/include/gen", "src/",
+])
+env.Append(LIBPATH=[cpp + "/bin"])
+env.Append(LIBS=["godot-cpp" + (".%s.%s.%s" % (platform, target, bits))])
+
+sources = Glob("src/*.cpp")
+library = env.SharedLibrary(SHLIBPREFIX="", target="bin/rtgi" + lib_suffix, source=sources)
+Default(library)
