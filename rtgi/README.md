@@ -72,11 +72,12 @@ New nodes created by the plugin start on High Quality. A node without the proper
 | | Low Quality | High Quality |
 |---|---|---|
 | probe density (follows `bounds_size`) | 0.7 / m, max 1200 probes | 1.6 / m, max 6000 probes |
-| rays per probe: instant / refinement | 4 / 32 | 10 / 192 |
+| rays per probe: instant / refinement | 8 / 32 | 10 / 192 |
 | explicit diffuse bounces per path | 2 | 3 |
 | probe feedback (infinite-bounce tail, refinement) | 0.7 | 0.97 |
-| denoiser | 2 passes, strong | 3 passes, edge-preserving |
+| denoiser | 3 passes, strong | 3 passes, edge-preserving |
 | refinement budget per frame | 4 ms | 10 ms |
+| display smoothing (refinement only; changes show instantly) | 0.3 | 0.35 |
 | memory / CPU | low | higher |
 
 Low/High ignore the individual quality properties (`probes_x/y/z`, `rays_per_probe`, `probes_per_frame`, `trace_budget_ms`, `settle_sweeps`, `bounce_strength`, `display_smoothing`, `denoise*`, `blend`); they are used only by **Custom**, together with `instant_rays` and `instant_bounces`. Switching presets never overwrites your Custom values. `get_quality_info()` returns a one-line summary of what the active preset resolves to.

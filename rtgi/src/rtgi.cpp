@@ -622,11 +622,11 @@ void RTGI::effective_quality(Quality &o) const {
 		o.denoise = true; o.denoise_strength = 0.6f; o.denoise_edge = 0.5f; o.denoise_passes = 3;
 		o.blend = 0.06f;
 	} else {
-		o.rays_refine = 32; o.rays_instant = 4; o.bounces = 2;
+		o.rays_refine = 32; o.rays_instant = 8; o.bounces = 2;
 		o.probes_per_frame = 32; o.trace_budget_ms = 4.0f; o.settle_sweeps = 6;
-		o.bounce_strength = 0.7f; o.display_smoothing = 0.5f;
-		o.denoise = true; o.denoise_strength = 0.8f; o.denoise_edge = 0.8f; o.denoise_passes = 2;
-		o.blend = 0.2f;
+		o.bounce_strength = 0.7f; o.display_smoothing = 0.3f; // smooths refinement only; a lighting change itself is always shown instantly (show_now)
+		o.denoise = true; o.denoise_strength = 0.8f; o.denoise_edge = 0.8f; o.denoise_passes = 3;
+		o.blend = 0.1f;
 	}
 }
 
@@ -1002,7 +1002,13 @@ void RTGI::instant_pass() {
 	const double budget_ms = quality_preset == QUALITY_LOW ? 10.0 : 24.0;
 	if (instant_ms_per_ray > 0.0) {
 		int fit = (int)(budget_ms / (instant_ms_per_ray * (double)total));
-		rays = std::max(std::min(2, q.rays_instant), std::min(q.rays_instant, fit));
+		int want = std::max(std::min(2, q.rays_instant), std::min(q.rays_instant, fit));
+		// hysteresis: the ray count (and with it the noise pattern) must not change from frame to frame while a light rotates,
+		// or the lighting flickers. Drop at once when too slow, but only climb back after 45 steady frames.
+		if (guard_rays <= 0 || want < guard_rays) { guard_rays = want; guard_up = 0; }
+		else if (want > guard_rays) { if (++guard_up >= 45) { guard_rays = want; guard_up = 0; } }
+		else guard_up = 0;
+		rays = std::min(rays, guard_rays);
 	}
 	const int bounces = q.bounces;
 	auto tp0 = std::chrono::steady_clock::now();
@@ -1074,7 +1080,9 @@ void RTGI::trace_frame() {
 	for (int k = 0; k < count; k++) {
 		int pi = (int)((start + k) % total);
 		float age = ages[pi];
-		float a = std::max(q.blend, 1.0f / (age + 1.0f));
+		// Low: the instant-pass result counts as one sample, so refinement blends into it instead of replacing it
+		// (otherwise the freshly shown light visibly re-fades over the next frames while the sweep passes over the grid)
+		float a = std::max(q.blend, 1.0f / (age + (quality_preset == QUALITY_LOW ? 4.0f : 1.0f)));
 		float *dst = &cube[(size_t)pi * 18];
 		const float *src = &results[(size_t)k * 19];
 		for (int i = 0; i < 18; i++) dst[i] += (src[i] - dst[i]) * a;
@@ -1198,6 +1206,8 @@ void RTGI::_process(float delta) {
 	}
 
 	bool show_now = false; // present the new result without any smoothing lag
+	const bool continuous = need_instant && moved_last; // light keeps changing frame after frame (rotating / dragging)
+	moved_last = need_instant;
 	if (need_instant) {
 		auto t0 = std::chrono::steady_clock::now();
 		flush_history();
@@ -1218,6 +1228,9 @@ void RTGI::_process(float delta) {
 		// smoothing only hides refinement noise; a lighting change (show_now) is displayed at once
 		float k = 1.0f - std::pow(1.0f - std::min(0.999f, std::max(0.02f, q.display_smoothing)), std::max(0.25f, std::min(4.0f, delta * 60.0f)));
 		if (q.display_smoothing >= 0.999f || show_now) k = 1.0f;
+		// Low: while a light keeps moving, blend 70% new / 30% previous so single-sample shadow pops don't flicker.
+		// The first frame of any change (and every non-Low preset) is still shown fully instantly.
+		if (show_now && continuous && quality_preset == QUALITY_LOW) k = 0.7f;
 		// spatial denoise: edge-aware blur across neighbouring probes (strongest on freshly re-traced, noisy probes)
 		const std::vector<float> *target = &cube;
 		if (q.denoise) {
