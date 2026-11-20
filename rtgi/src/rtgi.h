@@ -142,6 +142,7 @@ class RTGI : public Spatial {
 	int nobounce_left = 0;
 	double ms_per_probe = 0.0;
 	bool moved_last = false;
+	bool continuous_motion = false; // true while something keeps changing frame after frame
 	int guard_rays = 0, guard_up = 0; // responsiveness guard state (hysteresis)
 	double instant_ms_per_ray = 0.0; // measured cost of the instant pass (per probe-ray), for the responsiveness guard
 	std::vector<float> valid; // 1 = probe in free space, 0 = inside geometry

@@ -997,16 +997,16 @@ void RTGI::instant_pass() {
 	}
 	int nt = worker_threads(thread_count, (int)total);
 	// Responsiveness guard: every probe is always overwritten, but if a full pass would exceed the time budget (slow CPU, huge grid,
-	// light being dragged) the instant pass uses fewer rays per probe (never fewer than 2). Refinement restores the quality afterwards.
+	// light being dragged) the instant pass uses fewer rays per probe (never fewer than 4). Refinement restores the quality afterwards.
 	int rays = q.rays_instant;
-	const double budget_ms = quality_preset == QUALITY_LOW ? 10.0 : 24.0;
+	const double budget_ms = quality_preset == QUALITY_LOW ? 14.0 : 30.0;
 	if (instant_ms_per_ray > 0.0) {
 		int fit = (int)(budget_ms / (instant_ms_per_ray * (double)total));
-		int want = std::max(std::min(2, q.rays_instant), std::min(q.rays_instant, fit));
+		int want = std::max(std::min(4, q.rays_instant), std::min(q.rays_instant, fit));
 		// hysteresis: the ray count (and with it the noise pattern) must not change from frame to frame while a light rotates,
-		// or the lighting flickers. Drop at once when too slow, but only climb back after 45 steady frames.
+		// or the lighting flickers. Drop at once when too slow, but only climb back after 15 steady frames.
 		if (guard_rays <= 0 || want < guard_rays) { guard_rays = want; guard_up = 0; }
-		else if (want > guard_rays) { if (++guard_up >= 45) { guard_rays = want; guard_up = 0; } }
+		else if (want > guard_rays) { if (++guard_up >= 15) { guard_rays = want; guard_up = 0; } }
 		else guard_up = 0;
 		rays = std::min(rays, guard_rays);
 	}
@@ -1206,7 +1206,7 @@ void RTGI::_process(float delta) {
 	}
 
 	bool show_now = false; // present the new result without any smoothing lag
-	const bool continuous = need_instant && moved_last; // light keeps changing frame after frame (rotating / dragging)
+	continuous_motion = need_instant && moved_last; // something keeps changing frame after frame (rotating / dragging)
 	moved_last = need_instant;
 	if (need_instant) {
 		auto t0 = std::chrono::steady_clock::now();
@@ -1228,9 +1228,9 @@ void RTGI::_process(float delta) {
 		// smoothing only hides refinement noise; a lighting change (show_now) is displayed at once
 		float k = 1.0f - std::pow(1.0f - std::min(0.999f, std::max(0.02f, q.display_smoothing)), std::max(0.25f, std::min(4.0f, delta * 60.0f)));
 		if (q.display_smoothing >= 0.999f || show_now) k = 1.0f;
-		// Low: while a light keeps moving, blend 70% new / 30% previous so single-sample shadow pops don't flicker.
-		// The first frame of any change (and every non-Low preset) is still shown fully instantly.
-		if (show_now && continuous && quality_preset == QUALITY_LOW) k = 0.7f;
+		// While something keeps moving frame-to-frame, blend 80% new / 20% previous so single-sample shadow pops
+		// and colour noise don't flicker. The first frame of any change is still shown fully instantly.
+		if (show_now && continuous_motion) k = 0.8f;
 		// spatial denoise: edge-aware blur across neighbouring probes (strongest on freshly re-traced, noisy probes)
 		const std::vector<float> *target = &cube;
 		if (q.denoise) {
@@ -1238,6 +1238,8 @@ void RTGI::_process(float delta) {
 			dp.strength = std::min(1.0f, std::max(0.0f, q.denoise_strength));
 			dp.edge = std::max(0.05f, q.denoise_edge);
 			dp.passes = q.denoise_passes;
+			// During continuous motion every probe is freshly traced (age 0) and noisy — boost the denoiser
+			dp.young_boost = continuous_motion ? 2.5f : 1.0f;
 			int dnt = thread_count > 0 ? thread_count : (int)std::thread::hardware_concurrency();
 			dnt = std::max(1, std::min(dnt, 32));
 			rtgi::denoise_probes(cube, den, den_tmp, valid, ages, gx, gy, gz, dp, dnt);
