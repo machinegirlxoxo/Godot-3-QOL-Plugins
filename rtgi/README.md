@@ -65,6 +65,47 @@ Notes: it multiplies the whole lit frame (no separate ambient-only buffer in God
 don't exist; `strength` is the equivalent global knob. There is no blur pass, so low quality shows fine noise. Sky and transparent
 surfaces are skipped (transparents draw after the AO). Needs a Camera in the viewport; works with perspective and orthogonal cameras.
 
+## Per-pixel motion blur (`rtgi_motion_blur.gd`, `shaders/rtgi_motion_blur.shader`)
+Port of the Godot 4 **JFA driven motion blur** CompositorEffect addon (Sphynx Motion Blur Toolkit: `PreBlurProcessor` + `SphynxSimpleJumpFloodMotionBlur`).
+In the Environment inspector tick **Per-pixel Motion Blur -> Enabled**: an `RTGI_MotionBlur` node is created next to the WorldEnvironment (undoable). Manual alternative: add a Spatial with `res://addons/rtgi/rtgi_motion_blur.gd`. Pure GDScript + shader, no rebuild needed. Needs a Camera in the viewport (GLES3); it is hidden in the editor and only runs in the game.
+
+Godot 3 has no compute shaders, velocity buffer or CompositorEffect, so the pass chain of the Godot 4 addon is folded into one full-screen quad (drawn right after the SSAO quad, before transparent objects):
+1. **Velocity** per pixel from the depth buffer and the previous frame's camera, split into camera rotation / camera movement components with multiplier + lower/upper thresholds, exactly like `PreBlurProcessor` (sky = rotation only, never larger than the true camera velocity, clamped to one screen).
+2. **Dilation**: the jump flood fitness search (nearest neighbour whose blur covers the pixel, perpendicular error limit) evaluated as a gather: `jfa_pass_count` levels of 8 taps at `sample_step_multiplier * (2 + step_exponent_modifier)^level` px, tile-jittered, instead of ping-pong passes.
+3. **Blur**: the `jump_flood_simple_blur` gather: trail samples whose own blur reaches the pixel, depth aware foreground/background weighting and background reconstruction, noise-jittered samples.
+
+| property | meaning |
+|---|---|
+| intensity | blur length multiplier (default 1.0) |
+| quality | **Low / Medium / High / Custom** preset (default High = original look). Fills samples, jfa_pass_count, sample_step_multiplier, pixels_per_sample, fast_trail; editing any of them by hand switches to Custom. Also a drop-down in the Environment inspector under Per-pixel Motion Blur |
+| samples | maximum blur samples per pixel (4..64, default 16) |
+| pixels_per_sample | the sample count adapts to the blur length: one sample per this many px (default 1), capped by `samples` |
+| fast_trail | cheap trail test, reads depth only instead of rebuilding the velocity of every sample |
+| framerate_independent, target_constant_framerate, uncapped_independence | same as Godot 4: blur simulates a 1/30 s shutter (effective intensity = intensity * (1/target) / frame time, capped at one frame of motion unless uncapped) |
+| perpen_error_threshold, sample_step_multiplier, step_exponent_modifier, jfa_pass_count | jump flood dilation settings. Max dilation radius (px) = (2 + step_exponent_modifier)^(jfa_pass_count - 1) * sample_step_multiplier (default 3^2 * 16 = 144 px) |
+| depth_softness | relative depth range over which foreground / background weights fade (new; Godot 4 used a fixed raw-depth constant) |
+| camera_rotation_* / camera_movement_* | multiplier, lower and upper threshold of each velocity component |
+| debug_view | Off / own velocity / dilated velocity / object velocity (shows which moving meshes were picked up) |
+
+Differences from the Godot 4 addon: per-object velocity is emulated (see **Moving object blur** below) since Godot 3 renders no velocity buffer; the blur is one pass instead of compute stages (tile max / neighbour max are replaced by the jittered gather); both velocities are scaled by `intensity` in the blur (Godot 4 applied it partly twice). Transparent surfaces draw after the blur and are not blurred. Call `reset()` after teleporting or cutting the camera to avoid one smeared frame.
+
+## Moving object blur (`object_motion`, `object_multiplier`)
+Meshes that move on their own are blurred too, not only camera motion. Every `MeshInstance` whose `global_transform` changed since the last frame
+is drawn into a hidden helper viewport (own world, `ObjectVelocityViewport`) with `shaders/rtgi_velocity.shader`, which writes the pixel's full
+screen-space velocity (previous model matrix + previous camera -> current) and its linear depth into a half-float texture. The blur shader reads
+that texture: where the stored depth matches the scene depth (so occluded parts of an object are ignored) it uses the object velocity instead of the
+camera-derived one, and the existing dilation / blur passes then smear the object's trail past its silhouette. Nothing to set up: moving meshes are found
+automatically (new meshes are picked up as they enter the tree, plus a safety rescan every 300 frames); add a node to group `motion_blur_ignore` to exclude it. `object_multiplier` scales the object
+velocity, `object_motion` switches the feature off. Not supported: skinned/bone animation, vertex-shader animation, transparent objects, and objects
+that rotate/scale are only as accurate as one transform per frame. For offline rendering set `framerate_independent = false`.
+
+The blur quad is drawn at priority -127 and the SSAO quad at -126 (the screen copy a screen-reading shader gets is taken before the transparent pass, so the order matters: AO is multiplied onto the already blurred frame).
+
+### Motion blur performance
+Presets (samples / jump levels / step px / px per sample / fast trail / cross dilation): **Low** 6 / 2 / 24 / 4 / on / on (max blur 72 px), **Medium** (default) 10 / 3 / 14 / 3 / on / off (126 px), **High** 16 / 3 / 16 / 1 / off / off (144 px).
+The jump flood search is skipped while the camera only rotates and nothing moves (velocity is then independent of depth). The object velocity viewport only renders on frames where a mesh moved. Meshes idle for 30 frames are polled every 8 frames (a mesh that starts moving shows no blur for its first frame).
+The full-screen pass is skipped while the camera is still and no object moves; the shader only reads the object-velocity texture on frames where a mesh actually moved.
+
 ## GI quality presets (`quality_preset`)
 On the RTGI node (and in the Environment inspector's **RTGI -> GI Quality** drop-down): **Low Quality**, **High Quality** or **Custom**.
 New nodes created by the plugin start on High Quality. A node without the property (old scenes) loads as Custom, i.e. exactly its saved settings.

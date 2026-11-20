@@ -67,10 +67,11 @@ func _exit_tree():
 func _build():
 	_mat = ShaderMaterial.new()
 	_mat.shader = load(SHADER_PATH)
-	_mat.render_priority = -128 # first in the transparent pass: glass etc. is drawn on top of the AO
+	_mat.render_priority = -126 # after the motion blur quad (-127), which copies the screen and would otherwise paint over the AO; glass etc. still draws on top
 	var q = QuadMesh.new()
 	q.size = Vector2(2, 2)
 	_mi = MeshInstance.new()
+	_mi.add_to_group("rtgi_ignore")
 	_mi.name = "SSAOQuad"
 	_mi.mesh = q
 	_mi.material_override = _mat

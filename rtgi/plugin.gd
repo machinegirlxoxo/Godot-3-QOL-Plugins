@@ -106,6 +106,36 @@ func set_ssao_enabled(world_env, on, panel):
 		ur.commit_action()
 	_refresh(panel)
 
+# Create (on = true) or remove (on = false) the per-pixel motion blur node next to `world_env`.
+func set_motion_blur_enabled(world_env, on, panel):
+	if not is_instance_valid(world_env):
+		return
+	var parent = world_env.get_parent()
+	var root = get_editor_interface().get_edited_scene_root()
+	if parent == null or root == null:
+		_refresh(panel)
+		return
+	var ur = get_undo_redo()
+	var existing = Util.find_motion_blur(parent)
+	if on and existing == null:
+		var node = Spatial.new()
+		node.name = Util.MOTION_BLUR_NODE_NAME
+		node.set_script(load(Util.MOTION_BLUR_SCRIPT_PATH))
+		ur.create_action("Enable Per-pixel Motion Blur")
+		ur.add_do_method(parent, "add_child", node)
+		ur.add_do_method(node, "set_owner", root)
+		ur.add_do_reference(node)
+		ur.add_undo_method(parent, "remove_child", node)
+		ur.commit_action()
+	elif not on and existing != null:
+		ur.create_action("Disable Per-pixel Motion Blur")
+		ur.add_do_method(parent, "remove_child", existing)
+		ur.add_undo_method(parent, "add_child", existing)
+		ur.add_undo_method(existing, "set_owner", root)
+		ur.add_undo_reference(existing)
+		ur.commit_action()
+	_refresh(panel)
+
 func fit_rtgi(world_env, panel):
 	if not is_instance_valid(world_env):
 		return
@@ -136,6 +166,23 @@ func set_rtgi_quality(world_env, preset, panel):
 	ur.create_action("Set RTGI Quality")
 	ur.add_do_property(node, "quality_preset", preset)
 	ur.add_undo_property(node, "quality_preset", node.quality_preset)
+	ur.commit_action()
+	_refresh(panel)
+
+func set_motion_blur_quality(world_env, preset, panel):
+	if not is_instance_valid(world_env):
+		return
+	var node = Util.find_motion_blur(world_env.get_parent())
+	if node == null or not ("quality" in node):
+		_refresh(panel)
+		return
+	var ur = get_undo_redo()
+	ur.create_action("Set Motion Blur Quality")
+	var props = ["samples", "jfa_pass_count", "sample_step_multiplier", "pixels_per_sample", "fast_trail", "dilation_cross_only"]
+	for p in props:
+		ur.add_undo_property(node, p, node.get(p))
+	ur.add_undo_property(node, "quality", node.quality)
+	ur.add_do_property(node, "quality", preset)
 	ur.commit_action()
 	_refresh(panel)
 

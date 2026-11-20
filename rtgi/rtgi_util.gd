@@ -6,6 +6,8 @@ const GDNS_PATH = "res://addons/rtgi/bin/rtgi.gdns"
 const NODE_NAME = "RTGI"
 const SSAO_SCRIPT_PATH = "res://addons/rtgi/rtgi_ssao.gd"
 const SSAO_NODE_NAME = "RTGI_SSAO"
+const MOTION_BLUR_SCRIPT_PATH = "res://addons/rtgi/rtgi_motion_blur.gd"
+const MOTION_BLUR_NODE_NAME = "RTGI_MotionBlur"
 const MAX_PROBES = 4096
 const PROBE_SPACING = 1.0
 const PADDING = 1.0
@@ -37,6 +39,16 @@ static func find_ssao(parent):
 	for c in parent.get_children():
 		var s = c.get_script()
 		if s and s.resource_path == SSAO_SCRIPT_PATH:
+			return c
+	return null
+
+# The per-pixel motion blur node (script rtgi_motion_blur.gd) among the children of `parent`, or null.
+static func find_motion_blur(parent):
+	if parent == null:
+		return null
+	for c in parent.get_children():
+		var s = c.get_script()
+		if s and s.resource_path == MOTION_BLUR_SCRIPT_PATH:
 			return c
 	return null
 

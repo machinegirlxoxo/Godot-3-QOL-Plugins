@@ -17,6 +17,9 @@ var quality_opt
 var quality_info
 var ssao_chk
 var ssao_extra
+var mb_chk
+var mb_extra
+var mb_quality_opt
 
 func setup(p_plugin, p_env):
 	plugin = p_plugin
@@ -93,6 +96,40 @@ func _build():
 	ssao_extra.add_child(sb)
 	add_child(ssao_extra)
 
+	# Per-pixel motion blur (separate node, independent of RTGI / SSAO)
+	var mt = Label.new()
+	mt.text = "Per-pixel Motion Blur"
+	add_child(mt)
+	var mrow = HBoxContainer.new()
+	var mlab = Label.new()
+	mlab.text = "Enabled"
+	mlab.size_flags_horizontal = SIZE_EXPAND_FILL
+	mrow.add_child(mlab)
+	mb_chk = CheckBox.new()
+	mrow.add_child(mb_chk)
+	add_child(mrow)
+	mb_chk.connect("toggled", self, "_on_mb_enabled")
+
+	mb_extra = VBoxContainer.new()
+	var mqrow = HBoxContainer.new()
+	var mqlab = Label.new()
+	mqlab.text = "Quality"
+	mqlab.size_flags_horizontal = SIZE_EXPAND_FILL
+	mqrow.add_child(mqlab)
+	mb_quality_opt = OptionButton.new()
+	mb_quality_opt.add_item("Low", 0)
+	mb_quality_opt.add_item("Medium", 1)
+	mb_quality_opt.add_item("High", 2)
+	mb_quality_opt.add_item("Custom", 3)
+	mb_quality_opt.connect("item_selected", self, "_on_mb_quality")
+	mqrow.add_child(mb_quality_opt)
+	mb_extra.add_child(mqrow)
+	var mb = Button.new()
+	mb.text = "Select Motion Blur Node (all settings)"
+	mb.connect("pressed", self, "_on_select_mb")
+	mb_extra.add_child(mb)
+	add_child(mb_extra)
+
 # Re-read the scene and update the widgets (no nodes are created or freed here).
 func refresh():
 	var root = plugin.get_editor_interface().get_edited_scene_root()
@@ -124,6 +161,18 @@ func refresh():
 		ssao_chk.connect("toggled", self, "_on_ssao_enabled")
 	ssao_extra.visible = has_ssao
 
+	mb_chk.disabled = not ok
+	var has_mb = ok and Util.find_motion_blur(world_env.get_parent()) != null
+	if mb_chk.pressed != has_mb:
+		mb_chk.disconnect("toggled", self, "_on_mb_enabled")
+		mb_chk.pressed = has_mb
+		mb_chk.connect("toggled", self, "_on_mb_enabled")
+	mb_extra.visible = has_mb
+	if has_mb:
+		var mbn = Util.find_motion_blur(world_env.get_parent())
+		if mbn != null and ("quality" in mbn):
+			mb_quality_opt.select(mb_quality_opt.get_item_index(mbn.quality))
+
 func _on_enabled(on):
 	if world_env == null:
 		return
@@ -151,5 +200,20 @@ func _on_ssao_enabled(on):
 func _on_select_ssao():
 	if world_env:
 		var node = Util.find_ssao(world_env.get_parent())
+		if node:
+			plugin.get_editor_interface().call_deferred("edit_node", node)
+
+func _on_mb_enabled(on):
+	if world_env == null:
+		return
+	plugin.call_deferred("set_motion_blur_enabled", world_env, on, self)
+
+func _on_mb_quality(idx):
+	if world_env and idx < 3:
+		plugin.call_deferred("set_motion_blur_quality", world_env, mb_quality_opt.get_item_id(idx), self)
+
+func _on_select_mb():
+	if world_env:
+		var node = Util.find_motion_blur(world_env.get_parent())
 		if node:
 			plugin.get_editor_interface().call_deferred("edit_node", node)
